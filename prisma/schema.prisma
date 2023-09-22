@@ -19,4 +19,18 @@ model User{
 
   createdAt DateTime @default(now())
   updatedAT DateTime @updatedAt
+
+  tweet Tweet[]
+}
+
+model Tweet{
+  tweetID String @id @default(cuid())
+  content String
+  imageURL String?
+
+  tweetUser User @relation(fields: [tweetUserID], references: [id])
+  tweetUserID String
+
+  createdAt DateTime @default(now())
+  updatedAT DateTime @updatedAt
 }
