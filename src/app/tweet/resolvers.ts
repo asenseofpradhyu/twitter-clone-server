@@ -29,7 +29,7 @@ const mutations = {
 
 const extraTweetUserResolver =  {
     Tweet:{
-        tweetUser:(parent:Tweet) => prismaClientMain.user.findUnique({where: {id:parent.tweetID}}),
+        tweetUser:(parent:Tweet) => prismaClientMain.user.findUnique({where: {id:parent.tweetUserID}}),
     }
 }
 
