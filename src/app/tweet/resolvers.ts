@@ -1,27 +1,44 @@
 import { Tweet } from "@prisma/client";
+import {S3Client, PutObjectCommand} from '@aws-sdk/client-s3';
+import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
 import { prismaClientMain } from "../../client/db";
 import { GraphqlContext } from "../../interface";
+import UserService from "../../services/user";
+import TweetService, { CreateTweetData } from "../../services/tweet";
 
-interface CreateTweetData {
-    content: string;
-    imageURL?:string;
-}
+
+
+
+const s3Client = new S3Client({
+    region:process.env.AWS_DEFAULT_REGION
+});
 
 const queries = {
-    getAllTweets: async() => await prismaClientMain.tweet.findMany({orderBy: { createdAt:"desc" } }),
+    getAllTweets: async() => await TweetService.getAllTweets(),
+    getSignedURLForTweet: async(parent:any, {imageName, imageType}:{imageName:string, imageType:string}, ctx:GraphqlContext) => {
+        console.log(ctx.user?.id);
+        if(!ctx.user || !ctx.user.id) throw new Error("Unauthenticated");
+        const allowdImageTypes = ['image/jpg', 'image/jpeg', 'image/png'];
+        if(!allowdImageTypes.includes(imageType)) throw new Error("File Not Supported");
+
+        const putObjectCommand = new PutObjectCommand({
+            Bucket:process.env.AWS_S3_BUCKET_ID,
+            Key:`uploads/${ctx.user.id}/tweetsImage/${imageName}-${Date.now()}`
+        });
+
+        const sigedURL = await getSignedUrl(s3Client, putObjectCommand, {expiresIn:600});
+        return sigedURL;
+    } 
 }
 
 const mutations = {
     createTweet: async (parent:any, {payload}:{payload:CreateTweetData}, ctx:GraphqlContext) => {
 
         if(!ctx.user) throw new Error("user not logged In");
-        const tweet = await prismaClientMain.tweet.create({
-            data:{
-                content:payload.content,
-                imageURL:payload.imageURL,
-                tweetUser:{connect:{id:ctx.user?.id}},
-            }
-        })
+        const tweet = await TweetService.createTweet({
+            ...payload,
+            userID:ctx.user.id
+        });
 
         return tweet;
     }
@@ -29,7 +46,7 @@ const mutations = {
 
 const extraTweetUserResolver =  {
     Tweet:{
-        tweetUser:(parent:Tweet) => prismaClientMain.user.findUnique({where: {id:parent.tweetUserID}}),
+        tweetUser:(parent:Tweet) => UserService.getUserByID(parent.tweetUserID)
     }
 }
 

@@ -3,60 +3,15 @@ import { prismaClientMain } from "../../client/db";
 import JWTService from "../../services/jwt";
 import { GraphqlContext } from "../../interface";
 import { User } from "@prisma/client";
+import UserService from "../../services/user";
 
 
-interface googleOAuthResponse {
-  iss?: string;
-  nbf?: string;
-  aud?: string;
-  sub?: string;
-  email: string;
-  email_verified?: string;
-  azp?: string;
-  name?: string;
-  picture?: string;
-  given_name: string;
-  family_name?: string;
-  iat?: string;
-  exp?: string;
-  jti?: string;
-  alg?: string;
-  kid?: string;
-  typ?: string;
-}
+
 
 const queries = {
     verifyGoogleToken:async(parent:any, {token}:{token:string}) => {
-        const googleToken = token;
-        const googleOAuthURL = new URL('https://oauth2.googleapis.com/tokeninfo');
-        googleOAuthURL.searchParams.set('id_token', googleToken);
-
-        const {data} = await axios.get<googleOAuthResponse>(googleOAuthURL.toString(), {
-            responseType:'json'
-        });
-
-        console.log(data)
-
-        const isUserExist = await prismaClientMain.user.findUnique({ where: {email: data.email}});
-
-        if(!isUserExist){
-            await prismaClientMain.user.create({
-                data:{
-                    email: data.email,
-                    firstName: data.given_name,
-                    lastName: data.family_name,
-                    profileImageURl: data.picture
-                }
-            })
-        }
-
-
-
-        const userInDb = await prismaClientMain.user.findUnique({ where: {email: data.email}});
-        if(!userInDb) throw new Error("User with Email Not Found"); 
-        const userToken  = await JWTService.generateJWTTokenForUser(userInDb);
-
-        return userToken;
+        const resultToken = await UserService.verifyGoogleAuthLogin(token);
+        return resultToken;
 
     },
 
@@ -65,12 +20,12 @@ const queries = {
         const id = ctx.user?.id
         if(!id) return null;
 
-        const user = await prismaClientMain.user.findUnique({where:{id}});
+        const user = await UserService.getUserByID(id);
         return user;
     },
 
     getUserByID : async(parent:any, {id}:{id:string}, ctx:GraphqlContext) => {
-        const user = await prismaClientMain.user.findUnique({where:{id}});
+        const user = await UserService.getUserByID(id);
         return user;
     }
 }
@@ -78,7 +33,68 @@ const queries = {
 const extraUserTweetResolver = {
    User:{
      tweets:(parent:User) => prismaClientMain.tweet.findMany({where:{tweetUser:{id:parent.id}}}),
+     followers:async (parent:User) => {
+
+        const result = await prismaClientMain.follows.findMany({where:{following:{id:parent.id}},include:{ follower:true}});
+        return result.map((el:any) => el.follower);
+    },
+     followings:async (parent:User) => {
+        const result = await prismaClientMain.follows.findMany(
+        {
+            where:{follower:{id:parent.id}},
+            include:{ following:true}
+        });
+        return result.map((el:any) => el.following);
+    },
+    recommendedUsers: async (parent: User, _: any, ctx: GraphqlContext) => {
+      if (!ctx.user) return [];
+
+      const myFollowings = await prismaClientMain.follows.findMany({
+        where: {
+          follower: { id: ctx.user.id },
+        },
+        include: {
+          following: {
+            include: { followers: { include: { following: true } } },
+          },
+        },
+      });
+
+      const users: User[] = [];
+
+      for (const followings of myFollowings) {
+        for (const followingOfFollowedUser of followings.following.followers) {
+          if (
+            followingOfFollowedUser.following.id !== ctx.user.id &&
+            myFollowings.findIndex(
+              (e:any) => e?.followingId === followingOfFollowedUser.following.id
+            ) < 0
+          ) {
+            users.push(followingOfFollowedUser.following);
+          }
+        }
+      }
+
+      
+
+      return users;
+    },
    }
 }
 
-export const resolvers = {queries,extraUserTweetResolver};
+const mutations = {
+    followUser:async(parent:any, {to}:{to:string}, ctx:GraphqlContext) => {
+        if(!ctx.user || !ctx.user.id) throw new Error("Unauthenticated");
+        await UserService.followUser(ctx.user.id, to);
+        return true;
+},
+
+unFollowUser:async(parent:any, {to}:{to:string}, ctx:GraphqlContext) => {
+        if(!ctx.user || !ctx.user.id) throw new Error("Unauthenticated");
+        await UserService.deleteFollow(ctx.user.id, to);
+        return true;
+}
+
+};
+
+export const resolvers = {queries,extraUserTweetResolver, mutations};
